@@ -117,35 +117,29 @@ def update_elo(winner_elo, loser_elo, k=32):
     new_loser_elo = loser_elo - k * (1 - expected_win)
     return round(new_winner_elo), round(new_loser_elo)
 
-# --- Helper: Find Row Number by Title ---
-def find_row_number(title_value, sheet_data, title_idx):
-    for i, row in enumerate(sheet_data[1:], start=2):  # start=2 because row 1 is header
-        row_title = row[title_idx].strip().lower()
-        if row_title == title_value.strip().lower():
-            return i
-    return None
-
 # --- Process Vote and Update Sheet ---
 if st.session_state.vote:
     winner, loser = st.session_state.vote
     new_winner_elo, new_loser_elo = update_elo(winner["elo"], loser["elo"])
 
-    df_movies.loc[df_movies["Title"] == winner["Title"], "elo"] = new_winner_elo
-    df_movies.loc[df_movies["Title"] == loser["Title"], "elo"] = new_loser_elo
+    # ✅ Update Elo for all rows with same Title
+    df_movies.loc[df_movies["Title"].str.lower() == winner["Title"].lower(), "elo"] = new_winner_elo
+    df_movies.loc[df_movies["Title"].str.lower() == loser["Title"].lower(), "elo"] = new_loser_elo
 
     sheet_data = worksheet.get_all_values()
     headers = [h.strip().lower() for h in sheet_data[0]]
     title_idx = headers.index("title")
     elo_idx = headers.index("elo")
 
-    winner_row = find_row_number(winner["Title"], sheet_data, title_idx)
-    loser_row = find_row_number(loser["Title"], sheet_data, title_idx)
-
     try:
-        if winner_row:
-            worksheet.update_cell(winner_row, elo_idx + 1, new_winner_elo)
-        if loser_row:
-            worksheet.update_cell(loser_row, elo_idx + 1, new_loser_elo)
+        # Update all rows in sheet with same Title
+        for i, row in enumerate(sheet_data[1:], start=2):
+            row_title = row[title_idx].strip().lower()
+            if row_title == winner["Title"].strip().lower():
+                worksheet.update_cell(i, elo_idx + 1, new_winner_elo)
+            if row_title == loser["Title"].strip().lower():
+                worksheet.update_cell(i, elo_idx + 1, new_loser_elo)
+
         st.success(f"You voted for **{winner['Title'].title()}**! Elo updated.")
     except Exception as e:
         st.error(f"❌ Update failed: {e}")
@@ -169,23 +163,35 @@ for g in df_movies["genres"].dropna():
 genre_options = ["Overall"] + sorted(all_genres)
 selected_genre = st.selectbox("Filter leaderboard by genre:", genre_options)
 
-# Filter dataframe based on selection
+# ✅ Aggregate leaderboard by Title so duplicates collapse
 if selected_genre == "Overall":
-    leaderboard_df = df_movies.sort_values("elo", ascending=False)[["Title","director","genres","elo"]]
+    leaderboard_df = (
+        df_movies.groupby("Title", as_index=False)
+        .first()[["Title","director","genres","elo"]]
+        .sort_values("elo", ascending=False)
+    )
 else:
     mask = df_movies["genres"].str.contains(selected_genre, case=False, na=False)
-    leaderboard_df = df_movies[mask].sort_values("elo", ascending=False)[["Title","director","genres","elo"]]
+    leaderboard_df = (
+        df_movies[mask]
+        .groupby("Title", as_index=False)
+        .first()[["Title","director","genres","elo"]]
+        .sort_values("elo", ascending=False)
+    )
 
-st.dataframe(leaderboard_df,use_container_width=True,hide_index=True)
+st.dataframe(leaderboard_df, use_container_width=True, hide_index=True)
 
-
-
-
+# --- Top Movie in Each Genre ---
 def get_top_movies_by_genre(df):
     top_movies = []
     for g in sorted(set(genre.strip() for gs in df["genres"].dropna() for genre in gs.split(","))):
         mask = df["genres"].str.contains(g, case=False, na=False)
-        genre_df = df[mask].sort_values("elo", ascending=False)
+        genre_df = (
+            df[mask]
+            .groupby("Title", as_index=False)
+            .first()
+            .sort_values("elo", ascending=False)
+        )
         if not genre_df.empty:
             top_movies.append((g, genre_df.iloc[0]))
     return top_movies
